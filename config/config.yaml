@@ -1,0 +1,2 @@
+bin_output_path: "/tmp"
+debounce_time: 500
