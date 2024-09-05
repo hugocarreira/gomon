@@ -1,0 +1,27 @@
+version: 2
+
+project_name: gomon
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+  
+builds:
+  - id: build
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -v
+    ldflags:
+      - -s -w -X "main.gomonVersion={{.Version}}"
+      - -s -w -X "main.goVersion={{.GoVersion}}"
+    goos:
+      - linux
+      - darwin
+      - windows
+archives:
+  - id: tar.gz
+    format: tar.gz
+  - id: binary
+    format: binary
