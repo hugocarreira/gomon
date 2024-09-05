@@ -8,8 +8,8 @@ import (
 )
 
 type Config struct {
-	BinOutputPath string        `mapstructure:"bin_output_path"`
-	DebounceTime  time.Duration `mapstructure:"debounce_time"`
+	BinaryPath   string        `mapstructure:"binary_path"`
+	DebounceTime time.Duration `mapstructure:"debounce_time"`
 }
 
 var Global *Config
@@ -20,8 +20,8 @@ func LoadConfig() error {
 	viper.AddConfigPath("./config")
 
 	viper.SetDefault("log_level", "debug")
-	viper.SetDefault("bin_output_path", "/tmp/main")
-	viper.SetDefault("debounce_time", 500)
+	viper.SetDefault("binary_path", "/tmp/main")
+	viper.SetDefault("debounce_time", 2000)
 
 	if err := viper.ReadInConfig(); err != nil {
 		log.Fatalf("Erro ao ler arquivo de configuração: %v", err)

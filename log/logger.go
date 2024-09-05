@@ -6,12 +6,22 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var logger *zap.Logger
+type ILogger interface {
+	Info(m string, fields ...zap.Field)
+	Warn(m string, fields ...zap.Field)
+	Error(m string, fields ...zap.Field)
+	Debug(m string, fields ...zap.Field)
+	Fatal(m string, fields ...zap.Field)
+}
 
-func InitLogger() {
+type Logger struct {
+	logger *zap.Logger
+}
+
+func NewLogger() ILogger {
 	var err error
 
-	cfg := zap.Config{
+	logConfig := zap.Config{
 		Encoding:         "console",
 		Level:            zap.NewAtomicLevelAt(zap.DebugLevel),
 		OutputPaths:      []string{"stdout"},
@@ -24,33 +34,35 @@ func InitLogger() {
 		},
 	}
 
-	logger, err = cfg.Build()
+	logger, err := logConfig.Build()
 	if err != nil {
 		panic(err)
 	}
+
+	return &Logger{logger: logger}
 }
 
-func Info(m string, fields ...zap.Field) {
+func (l *Logger) Info(m string, fields ...zap.Field) {
 	c := color.GreenString(m)
-	logger.Info(c, fields...)
+	l.logger.Info(c, fields...)
 }
 
-func Warn(m string, fields ...zap.Field) {
+func (l *Logger) Warn(m string, fields ...zap.Field) {
 	c := color.YellowString(m)
-	logger.Warn(c, fields...)
+	l.logger.Warn(c, fields...)
 }
 
-func Error(m string, fields ...zap.Field) {
+func (l *Logger) Error(m string, fields ...zap.Field) {
 	c := color.RedString(m)
-	logger.Error(c, fields...)
+	l.logger.Error(c, fields...)
 }
 
-func Debug(m string, fields ...zap.Field) {
+func (l *Logger) Debug(m string, fields ...zap.Field) {
 	c := color.CyanString(m)
-	logger.Debug(c, fields...)
+	l.logger.Debug(c, fields...)
 }
 
-func Fatal(m string, fields ...zap.Field) {
+func (l *Logger) Fatal(m string, fields ...zap.Field) {
 	c := color.RedString(m)
-	logger.Fatal(c, fields...)
+	l.logger.Fatal(c, fields...)
 }

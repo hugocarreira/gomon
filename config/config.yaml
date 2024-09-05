@@ -1,2 +1,2 @@
-bin_output_path: "/tmp"
-debounce_time: 500
+binary_path: "/tmp/main"
+debounce_time: 2000
