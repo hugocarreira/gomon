@@ -67,7 +67,11 @@ func (e *EventsHandler) HandleEvent(event fsnotify.Event) {
 
 func (e *EventsHandler) StartDebounce() {
 	if !e.initialRun {
-		e.builder.RestartBinary()
+		err := e.builder.RestartBinary()
+		if err != nil {
+			e.log.Error("Erro ao reiniciar o binário", zap.Error(err))
+		}
+
 		e.initialRun = true
 	}
 
