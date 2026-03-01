@@ -3,6 +3,8 @@ package builder
 import (
 	"os"
 	"os/exec"
+	"syscall"
+	"time"
 )
 
 type IBuilder interface {
@@ -65,9 +67,29 @@ func (b *Builder) RestartBinary() error {
 }
 
 func (b *Builder) KillProcess(cmd *exec.Cmd) error {
-	if cmd != nil && cmd.Process != nil {
-		return cmd.Process.Kill()
+	if cmd == nil || cmd.Process == nil {
+		return nil
 	}
 
-	return nil
+	// Try graceful kill first (SIGTERM)
+	err := cmd.Process.Signal(syscall.SIGTERM)
+	if err != nil {
+		// Process may have already exited
+		return nil
+	}
+
+	// Wait for process to exit with a timeout
+	done := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-time.After(5 * time.Second):
+		// Force kill if it doesn't exit gracefully
+		return cmd.Process.Kill()
+	}
 }
