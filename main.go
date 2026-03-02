@@ -17,7 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Version info set via ldflags
 var (
 	version = "dev"
 	commit  = "unknown"
