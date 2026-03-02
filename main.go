@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/hugocarreira/gomon/config"
 	"github.com/hugocarreira/gomon/files"
@@ -24,12 +23,13 @@ var (
 )
 
 func main() {
-
 	helpFlag := flag.Bool("help", false, "Show usage information")
 	projectPath := flag.String("path", "", "Path to the Go project to watch (default: current directory)")
 	binaryPath := flag.String("binary", "", "Path to the output binary")
 	debounce := flag.Int("debounce", 0, "Debounce time in milliseconds")
+	logLevel := flag.String("log-level", "", "Logging level (debug, info, warn, error)")
 	showVersion := flag.Bool("version", false, "Show version information")
+
 	flag.Parse()
 
 	if *showVersion {
@@ -42,6 +42,7 @@ func main() {
 		fmt.Println("  -path string    Path to the Go project to watch (default: current directory)")
 		fmt.Println("  -binary string  Path to the output binary")
 		fmt.Println("  -debounce int   Debounce time in milliseconds (default: 2000)")
+		fmt.Println("  -log-level string Logging level (debug, info, warn, error)")
 		fmt.Println("  -version        Show version information")
 		fmt.Println("  -help           Show this help message")
 		os.Exit(0)
@@ -49,17 +50,12 @@ func main() {
 
 	log := logger.NewLogger()
 
-	err := config.LoadConfig()
+	err := config.LoadConfig(log)
 	if err != nil {
 		log.Fatal("Failed to load configuration", zap.Error(err))
 	}
 
-	if *projectPath != "" {
-		config.Global.BinaryPath = *binaryPath
-	}
-	if *debounce > 0 {
-		config.Global.DebounceTime = time.Duration(*debounce) * time.Millisecond
-	}
+	config.Global.SetupOverrides(*binaryPath, *logLevel, *debounce)
 
 	actualPath, err := files.DefineProjectPathWithFlag(*projectPath, os.Args)
 	if err != nil {
