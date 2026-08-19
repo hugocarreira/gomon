@@ -59,6 +59,38 @@ func TestDefineProjectPathWithArgs(t *testing.T) {
 	}
 }
 
+func TestDefineProjectPathWithFlagDefaultsToWorkingDirectory(t *testing.T) {
+	got, err := DefineProjectPathWithFlag("", []string{"cmd"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestDefineProjectPathDefaultsToWorkingDirectory(t *testing.T) {
+	got, err := DefineProjectPath([]string{"cmd"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+
+	if got, err := DefineProjectPath([]string{"cmd", "./project"}); err != nil || got != "project" {
+		t.Fatalf("unexpected positional path: %q, %v", got, err)
+	}
+}
+
 func TestVerifyProjectPath(t *testing.T) {
 	dir := t.TempDir()
 	if err := VerifyProjectPath(dir); err != nil {
@@ -101,5 +133,27 @@ func TestHandleFilesAddsDir(t *testing.T) {
 	}
 	if !f.WasWatchedDir(dir) {
 		t.Fatalf("expected %s to be recorded as watched", dir)
+	}
+}
+
+func TestHandleFilesIgnoresMissingPath(t *testing.T) {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("failed to create watcher: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := w.Close(); err != nil {
+			t.Errorf("close watcher: %v", err)
+		}
+	})
+
+	if err := NewFilesHandler(w).HandleFiles(filepath.Join(t.TempDir(), "missing")); err != nil {
+		t.Fatalf("expected missing event path to be ignored, got %v", err)
+	}
+}
+
+func TestHandleFilesRejectsNilWatcherForDirectory(t *testing.T) {
+	if err := NewFilesHandler(nil).HandleFiles(t.TempDir()); err == nil {
+		t.Fatal("expected nil watcher to return an error")
 	}
 }

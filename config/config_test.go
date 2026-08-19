@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -100,5 +101,79 @@ func TestLoadConfigForProjectExplicitMissingFile(t *testing.T) {
 	_, err := LoadConfigForProject(t.TempDir(), filepath.Join(t.TempDir(), "missing.yaml"))
 	if err == nil {
 		t.Fatal("expected missing explicit config to return an error")
+	}
+}
+
+func TestParseDebounceSupportsLegacyAndDurationValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  time.Duration
+	}{
+		{name: "duration", value: 750 * time.Millisecond, want: 750 * time.Millisecond},
+		{name: "duration string", value: "750ms", want: 750 * time.Millisecond},
+		{name: "legacy string", value: "750", want: 750 * time.Millisecond},
+		{name: "json number", value: json.Number("750"), want: 750 * time.Millisecond},
+		{name: "int", value: int(750), want: 750 * time.Millisecond},
+		{name: "int8", value: int8(7), want: 7 * time.Millisecond},
+		{name: "int16", value: int16(7), want: 7 * time.Millisecond},
+		{name: "int32", value: int32(7), want: 7 * time.Millisecond},
+		{name: "int64", value: int64(7), want: 7 * time.Millisecond},
+		{name: "uint", value: uint(7), want: 7 * time.Millisecond},
+		{name: "uint8", value: uint8(7), want: 7 * time.Millisecond},
+		{name: "uint16", value: uint16(7), want: 7 * time.Millisecond},
+		{name: "uint32", value: uint32(7), want: 7 * time.Millisecond},
+		{name: "uint64", value: uint64(7), want: 7 * time.Millisecond},
+		{name: "float32", value: float32(7), want: 7 * time.Millisecond},
+		{name: "float64", value: float64(7), want: 7 * time.Millisecond},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseDebounce(test.value)
+			if err != nil {
+				t.Fatalf("parseDebounce returned error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("parseDebounce(%v) = %v, want %v", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseDebounceRejectsInvalidValues(t *testing.T) {
+	for _, value := range []any{"", "not-a-duration", float64(1.5), struct{}{}} {
+		if _, err := parseDebounce(value); err == nil {
+			t.Fatalf("parseDebounce(%v) unexpectedly succeeded", value)
+		}
+	}
+	if _, err := parseDebounce(uint64(^uint64(0))); err == nil {
+		t.Fatal("expected oversized debounce to fail")
+	}
+}
+
+func TestConfigValidationHelpers(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error", " INFO "} {
+		if !ValidLogLevel(level) {
+			t.Fatalf("expected log level %q to be valid", level)
+		}
+	}
+	if ValidLogLevel("trace") {
+		t.Fatal("did not expect trace to be valid")
+	}
+	if got := DurationFromMilliseconds(25); got != 25*time.Millisecond {
+		t.Fatalf("unexpected duration: %v", got)
+	}
+}
+
+func TestLoadConfigForProjectRejectsInvalidSettings(t *testing.T) {
+	project := t.TempDir()
+	path := filepath.Join(project, ".gomon.yaml")
+	for _, contents := range []string{"debounce_time: 0\n", "log_level: trace\n"} {
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		if _, err := LoadConfigForProject(project, ""); err == nil {
+			t.Fatalf("expected invalid config %q to fail", contents)
+		}
 	}
 }

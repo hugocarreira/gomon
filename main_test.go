@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -45,5 +49,35 @@ func TestRunUsesPositionalArgumentAfterFlags(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "-debounce") {
 		t.Fatalf("flag name was incorrectly treated as project path: %s", stderr.String())
+	}
+}
+
+func TestRunStartsAndStopsProjectFromAnyWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal-driven integration test uses Unix process signals")
+	}
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte("module example.com/run-fixture\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "main.go"), []byte("package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(30 * time.Second) }\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run([]string{"--path", project, "--binary", filepath.Join(project, "app"), "--debounce", "10", "--log-level", "error"}, &stdout, &stderr)
+	}()
+
+	time.Sleep(750 * time.Millisecond)
+	terminateCurrentProcess(t)
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("run returned %d, stderr: %s", code, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not stop after termination signal")
 	}
 }

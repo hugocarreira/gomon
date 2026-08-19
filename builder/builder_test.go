@@ -98,6 +98,66 @@ func main() {
 	t.Fatal("child did not write its working directory")
 }
 
+func TestBuildProjectAndRunBinary(t *testing.T) {
+	project := writeBuilderProject(t, `package main
+
+import "time"
+
+func main() { time.Sleep(30 * time.Second) }
+`)
+
+	instance := NewBuilder(project, "")
+	b := instance.(*Builder)
+	t.Cleanup(func() { _ = instance.Close() })
+	if err := instance.BuildProject(); err != nil {
+		t.Fatalf("build failed: %v", err)
+	}
+	if _, err := os.Stat(b.outputPath); err != nil {
+		t.Fatalf("expected built binary %q: %v", b.outputPath, err)
+	}
+	cmd, err := instance.RunBinary()
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if err := instance.KillProcess(cmd); err != nil {
+		t.Fatalf("kill failed: %v", err)
+	}
+	if err := instance.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+	if err := instance.Close(); err != nil {
+		t.Fatalf("second close failed: %v", err)
+	}
+}
+
+func TestBuilderRejectsMissingOutputDirectory(t *testing.T) {
+	project := writeBuilderProject(t, "package main\nfunc main() {}\n")
+	instance := NewBuilder(project, filepath.Join("missing", "app"))
+	if err := instance.RestartBinary(); err == nil {
+		t.Fatal("expected staging path creation to fail")
+	}
+}
+
+func TestBuilderRunWithoutBuiltBinaryFails(t *testing.T) {
+	project := writeBuilderProject(t, "package main\nfunc main() {}\n")
+	instance := NewBuilder(project, "missing-app")
+	if _, err := instance.RunBinary(); err == nil {
+		t.Fatal("expected running a missing binary to fail")
+	}
+	if err := instance.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+}
+
+func TestProcessHelpersHandleCompletedAndNilProcesses(t *testing.T) {
+	if !isProcessDone(os.ErrProcessDone) {
+		t.Fatal("expected os.ErrProcessDone to be recognized")
+	}
+	if forceKillProcess(nil, processControl{}) != nil {
+		t.Fatal("expected nil process force kill to be harmless")
+	}
+}
+
 func writeBuilderProject(t *testing.T, mainSource string) string {
 	t.Helper()
 	project := t.TempDir()

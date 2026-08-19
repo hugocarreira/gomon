@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +113,43 @@ func TestEventsHandlerOnRenameRestarts(t *testing.T) {
 	}
 	if len(logger.successes) != 1 {
 		t.Fatalf("expected build success log for rename, got %d", len(logger.successes))
+	}
+}
+
+func TestEventsHandlerProcessEventUsesBitmask(t *testing.T) {
+	handler, builder, _ := newTestHandler(t)
+	handler.ProcessEvent(fsnotify.Event{Name: "created.go", Op: fsnotify.Create | fsnotify.Write})
+	if builder.restarts() != 1 {
+		t.Fatalf("expected one restart for combined create/write event, got %d", builder.restarts())
+	}
+}
+
+func TestEventsHandlerProcessEventDispatchesRemainingOperations(t *testing.T) {
+	handler, builder, logger := newTestHandler(t)
+	handler.ProcessEvent(fsnotify.Event{Name: "removed.go", Op: fsnotify.Remove})
+	handler.ProcessEvent(fsnotify.Event{Name: "renamed.go", Op: fsnotify.Rename})
+	handler.ProcessEvent(fsnotify.Event{Name: "changed.go", Op: fsnotify.Chmod})
+
+	if builder.restarts() != 2 {
+		t.Fatalf("expected remove and rename to restart, got %d", builder.restarts())
+	}
+	if len(logger.infos) != 3 {
+		t.Fatalf("expected three operation logs, got %d", len(logger.infos))
+	}
+}
+
+func TestEventsHandlerOnCreateAndErrors(t *testing.T) {
+	handler, builder, logger := newTestHandler(t)
+	handler.OnCreate(fsnotify.Event{Name: "created.go", Op: fsnotify.Create})
+	handler.OnChmod(fsnotify.Event{Name: "created.go", Op: fsnotify.Chmod})
+	handler.OnError(errors.New("overflow"))
+	handler.OnError(nil)
+
+	if builder.restarts() != 1 {
+		t.Fatalf("expected create to restart once, got %d", builder.restarts())
+	}
+	if len(logger.infos) != 2 || len(logger.errors) != 1 {
+		t.Fatalf("unexpected logs: infos=%d errors=%d", len(logger.infos), len(logger.errors))
 	}
 }
 
