@@ -31,7 +31,7 @@ func TestLoadConfigPopulatesGlobal(t *testing.T) {
 		Global = nil
 	})
 
-	if err := LoadConfig(); err != nil {
+	if err := LoadConfig(AppLogger); err != nil {
 		t.Fatalf("LoadConfig returned error: %v", err)
 	}
 
@@ -48,6 +48,31 @@ func TestLoadConfigPopulatesGlobal(t *testing.T) {
 	}
 	if Global.LogLevel != DefaultLogLevel {
 		t.Fatalf("expected log level %q, got %q", DefaultLogLevel, Global.LogLevel)
+	}
+}
+
+func TestSetupOverrides(t *testing.T) {
+	cfg := &Config{
+		BinaryPath:   "/tmp/main",
+		DebounceTime: 2 * time.Second,
+		LogLevel:     "warn",
+	}
+
+	cfg.SetupOverrides("/tmp/app", " DEBUG ", 3000)
+
+	if cfg.BinaryPath != "/tmp/app" {
+		t.Fatalf("expected binary path /tmp/app, got %s", cfg.BinaryPath)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Fatalf("expected log level debug, got %s", cfg.LogLevel)
+	}
+	if cfg.DebounceTime != 3*time.Second {
+		t.Fatalf("expected debounce time 3s, got %v", cfg.DebounceTime)
+	}
+
+	cfg.SetupOverrides("", "", 0)
+	if cfg.BinaryPath != "/tmp/app" || cfg.LogLevel != "debug" || cfg.DebounceTime != 3*time.Second {
+		t.Fatalf("empty overrides changed config: %+v", cfg)
 	}
 }
 

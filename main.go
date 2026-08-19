@@ -122,15 +122,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		baseLog.Error("Failed to load configuration", zap.Error(err))
 		return 1
 	}
-	if binaryPath != "" {
-		cfg.BinaryPath = binaryPath
-	}
-	if debounce > 0 {
-		cfg.DebounceTime = config.DurationFromMilliseconds(debounce)
-	}
-	if logLevel != "" {
-		cfg.LogLevel = logLevel
-	}
+	cfg.SetupOverrides(binaryPath, logLevel, debounce)
 	log := logger.NewLoggerWithLevel(cfg.LogLevel)
 
 	w, err := watcher.NewWatcher(actualPath, cfg, log)

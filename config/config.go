@@ -39,7 +39,11 @@ var AppLogger logger.ILogger
 // LoadConfig loads the configuration for the current working directory.
 // It preserves the original API while allowing the application to use the
 // project-aware LoadConfigForProject function.
-func LoadConfig() error {
+func LoadConfig(log logger.ILogger) error {
+	if log != nil {
+		AppLogger = log
+	}
+
 	projectPath, err := os.Getwd()
 	if err != nil {
 		return err
@@ -51,6 +55,21 @@ func LoadConfig() error {
 	}
 	Global = cfg
 	return nil
+}
+
+// SetupOverrides applies non-empty command-line values to the configuration.
+// It is retained for callers of the original package API; the CLI validates
+// values before calling it.
+func (c *Config) SetupOverrides(binaryPath, logLevel string, debounce int) {
+	if binaryPath != "" {
+		c.BinaryPath = binaryPath
+	}
+	if logLevel != "" {
+		c.LogLevel = strings.ToLower(strings.TrimSpace(logLevel))
+	}
+	if debounce != 0 {
+		c.DebounceTime = DurationFromMilliseconds(debounce)
+	}
 }
 
 // LoadConfigForProject loads an optional project configuration. The preferred

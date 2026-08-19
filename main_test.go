@@ -73,7 +73,19 @@ func TestRunStartsAndStopsProjectFromAnyWorkingDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte("module example.com/run-fixture\n\ngo 1.25\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(project, "main.go"), []byte("package main\n\nimport \"time\"\n\nfunc main() { time.Sleep(30 * time.Second) }\n"), 0o644); err != nil {
+	mainSource := []byte(`package main
+
+import (
+	"os"
+	"time"
+)
+
+func main() {
+	_ = os.WriteFile("ready", []byte("ready"), 0o644)
+	time.Sleep(30 * time.Second)
+}
+`)
+	if err := os.WriteFile(filepath.Join(project, "main.go"), mainSource, 0o644); err != nil {
 		t.Fatalf("write main.go: %v", err)
 	}
 
@@ -83,7 +95,16 @@ func TestRunStartsAndStopsProjectFromAnyWorkingDirectory(t *testing.T) {
 		done <- run([]string{"--path", project, "--binary", filepath.Join(project, "app"), "--debounce", "10", "--log-level", "error"}, &stdout, &stderr)
 	}()
 
-	time.Sleep(750 * time.Millisecond)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(project, "ready")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("project process did not signal readiness")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	terminateCurrentProcess(t)
 	select {
 	case code := <-done:
