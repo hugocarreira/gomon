@@ -2,6 +2,8 @@
 package logger
 
 import (
+	"strings"
+
 	"github.com/fatih/color"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -33,6 +35,7 @@ func NewLogger() ILogger {
 // NewLoggerWithLevel creates a Logger with the requested level. Invalid
 // values fall back to debug so configuration errors can still be reported.
 func NewLoggerWithLevel(level string) ILogger {
+	level = strings.ToLower(strings.TrimSpace(level))
 	logLevel := zap.DebugLevel
 	switch level {
 	case "error":

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/hugocarreira/gomon/config"
@@ -77,6 +78,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unsupported log level %q\n", logLevel)
 		return 2
 	}
+	logLevel = strings.ToLower(strings.TrimSpace(logLevel))
 
 	pathArgs := []string{"gomon"}
 	pathArgs = append(pathArgs, positional...)
