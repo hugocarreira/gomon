@@ -6,7 +6,7 @@ This document provides essential information for agentic coding agents working o
 
 GoMon is a file watcher for Golang projects that automatically rebuilds and restarts the binary when source files change (similar to nodemon for Node.js).
 
-- **Language**: Go 1.23.0
+- **Language**: Go 1.25.0
 - **Module**: github.com/hugocarreira/gomon
 - **Build Output**: `gomon` binary
 
@@ -23,7 +23,7 @@ go build -o gomon .
 # Run the application
 go run . [project_path]
 
-# Run with specific config
+# Run with an optional project configuration
 ./gomon ./your-go-project
 ```
 
@@ -41,12 +41,15 @@ go test -v -run TestFunctionName ./...
 
 # Run with coverage
 go test -v -cover ./...
+
+# Run with the race detector
+go test -race ./...
 ```
 
 ### Linting
 
 ```bash
-# Run golangci-lint (version v1.60 as per CI)
+# Run golangci-lint (the CI-pinned version)
 golangci-lint run
 
 # Run golangci-lint on specific files
@@ -179,7 +182,7 @@ type IBuilder interface {
 ├── builder/             # Go build/restart logic
 ├── events/              # Event handling with debouncing
 ├── files/               # File path utilities
-├── log/                 # Logger (zap + fatih/color)
+├── logger/              # Logger (zap + fatih/color)
 ├── .github/workflows/   # CI (golangci-lint)
 └── .goreleaser.yaml     # Release configuration
 ```
@@ -188,15 +191,18 @@ type IBuilder interface {
 
 ## Configuration
 
-- Config file: `config/config.yaml`
+- Preferred project config: `<project>/.gomon.yaml`
+- Legacy fallback: `<project>/config/config.yaml` (deprecated)
+- An explicit config may be selected with `--config`
+- CLI flags override file values
 - Uses viper for configuration management
-- Default values set in code (see `config/config.go`)
+- Default values are defined in `config/config.go`
 
 ---
 
 ## CI/CD
 
-- **Linting**: golangci-lint v1.60 (runs on push to main/master and PRs)
+- **Formatting, tests, race tests, vet, and linting** run in GitHub Actions
 - **Release**: goreleaser (see `.goreleaser.yaml`)
 
 ---
@@ -245,7 +251,9 @@ go vet ./...
 
 ## Notes for Agents
 
-- This codebase has **no existing tests** - prioritize adding tests when modifying code
+- The codebase has package tests; add regression tests for every behavior change
 - The project uses Portuguese error messages in some places - maintain consistency with existing code
 - Interfaces are used throughout for dependency injection and testability
 - The project follows a clean package-based architecture
+- Preserve uncommitted user files and inspect `git status` before editing
+- Split substantial work into focused commits with a conventional prefix such as `(fix)`, `(test)`, `(ci)`, or `(docs)`
