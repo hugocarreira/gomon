@@ -83,7 +83,11 @@ func TestHandleFilesAddsDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create watcher: %v", err)
 	}
-	defer w.Close()
+	t.Cleanup(func() {
+		if err := w.Close(); err != nil {
+			t.Errorf("close watcher: %v", err)
+		}
+	})
 
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "src")

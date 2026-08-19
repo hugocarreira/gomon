@@ -183,7 +183,11 @@ func TestEventsHandlerAddsCreatedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create watcher: %v", err)
 	}
-	defer watcher.Close()
+	t.Cleanup(func() {
+		if err := watcher.Close(); err != nil {
+			t.Errorf("close watcher: %v", err)
+		}
+	})
 
 	handler, _, _ := newTestHandler(t)
 	handler.filesHandler = files.NewFilesHandler(watcher)

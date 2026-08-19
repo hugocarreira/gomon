@@ -15,7 +15,9 @@ func TestLoadConfigPopulatesGlobal(t *testing.T) {
 		t.Fatalf("failed to determine working directory: %v", err)
 	}
 	t.Cleanup(func() {
-		os.Chdir(originalWD)
+		if err := os.Chdir(originalWD); err != nil {
+			t.Errorf("failed to restore working directory: %v", err)
+		}
 	})
 
 	if err := os.Chdir(".."); err != nil {

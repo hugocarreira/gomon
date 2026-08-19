@@ -94,7 +94,7 @@ func (b *Builder) RestartBinary() error {
 	if err != nil {
 		return fmt.Errorf("create build staging path: %w", err)
 	}
-	defer os.Remove(stage)
+	defer func() { _ = os.Remove(stage) }()
 
 	if err := b.build(stage); err != nil {
 		return err

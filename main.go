@@ -46,36 +46,48 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flagSet.BoolVar(&showVersion, "version", false, "Show version information")
 	flagSet.BoolVar(&help, "help", false, "Show usage information")
 	flagSet.Usage = func() {
-		printUsage(stdout)
+		_ = printUsage(stdout)
 	}
 
 	if err := flagSet.Parse(args); err != nil {
 		return 2
 	}
 	if showVersion {
-		fmt.Fprintf(stdout, "gomon version %s (commit: %s, date: %s)\n", version, commit, date)
+		if _, err := fmt.Fprintf(stdout, "gomon version %s (commit: %s, date: %s)\n", version, commit, date); err != nil {
+			return 1
+		}
 		return 0
 	}
 	if help {
-		printUsage(stdout)
+		if err := printUsage(stdout); err != nil {
+			return 1
+		}
 		return 0
 	}
 
 	positional := flagSet.Args()
 	if len(positional) > 1 {
-		fmt.Fprintln(stderr, "only one positional project path is allowed")
+		if _, err := fmt.Fprintln(stderr, "only one positional project path is allowed"); err != nil {
+			return 1
+		}
 		return 2
 	}
 	if projectPath != "" && len(positional) == 1 {
-		fmt.Fprintln(stderr, "use either --path or a positional project path, not both")
+		if _, err := fmt.Fprintln(stderr, "use either --path or a positional project path, not both"); err != nil {
+			return 1
+		}
 		return 2
 	}
 	if debounce < 0 {
-		fmt.Fprintln(stderr, "debounce must not be negative")
+		if _, err := fmt.Fprintln(stderr, "debounce must not be negative"); err != nil {
+			return 1
+		}
 		return 2
 	}
 	if logLevel != "" && !config.ValidLogLevel(logLevel) {
-		fmt.Fprintf(stderr, "unsupported log level %q\n", logLevel)
+		if _, err := fmt.Fprintf(stderr, "unsupported log level %q\n", logLevel); err != nil {
+			return 1
+		}
 		return 2
 	}
 	logLevel = strings.ToLower(strings.TrimSpace(logLevel))
@@ -84,16 +96,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 	pathArgs = append(pathArgs, positional...)
 	actualPath, err := files.DefineProjectPathWithFlag(projectPath, pathArgs)
 	if err != nil {
-		fmt.Fprintf(stderr, "failed to determine project path: %v\n", err)
+		if _, writeErr := fmt.Fprintf(stderr, "failed to determine project path: %v\n", err); writeErr != nil {
+			return 1
+		}
 		return 1
 	}
 	actualPath, err = filepath.Abs(actualPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "failed to resolve project path: %v\n", err)
+		if _, writeErr := fmt.Fprintf(stderr, "failed to resolve project path: %v\n", err); writeErr != nil {
+			return 1
+		}
 		return 1
 	}
 	if err := files.VerifyProjectPath(actualPath); err != nil {
-		fmt.Fprintf(stderr, "project directory not found: %v\n", err)
+		if _, writeErr := fmt.Fprintf(stderr, "project directory not found: %v\n", err); writeErr != nil {
+			return 1
+		}
 		return 1
 	}
 
@@ -143,18 +161,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "GoMon usage:")
-	fmt.Fprintln(out, "  gomon [flags] [project_path]")
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Flags:")
-	fmt.Fprintln(out, "  -path string       Path to the Go project to watch (default: current directory)")
-	fmt.Fprintln(out, "  -binary string     Path to the output binary")
-	fmt.Fprintln(out, "  -config string     Path to a configuration file")
-	fmt.Fprintln(out, "  -debounce int      Debounce time in milliseconds (default: 2000)")
-	fmt.Fprintln(out, "  -log-level string  Log level: debug, info, warn, or error")
-	fmt.Fprintln(out, "  -version           Show version information")
-	fmt.Fprintln(out, "  -help              Show this help message")
+func printUsage(out io.Writer) error {
+	lines := []string{
+		"GoMon usage:",
+		"  gomon [flags] [project_path]",
+		"",
+		"Flags:",
+		"  -path string       Path to the Go project to watch (default: current directory)",
+		"  -binary string     Path to the output binary",
+		"  -config string     Path to a configuration file",
+		"  -debounce int      Debounce time in milliseconds (default: 2000)",
+		"  -log-level string  Log level: debug, info, warn, or error",
+		"  -version           Show version information",
+		"  -help              Show this help message",
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(out, line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func main() {
