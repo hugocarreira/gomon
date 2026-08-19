@@ -22,9 +22,9 @@ type IBuilder interface {
 }
 
 type runningProcess struct {
-	cmd          *exec.Cmd
-	done         <-chan error
-	processGroup bool
+	cmd     *exec.Cmd
+	done    <-chan error
+	control processControl
 }
 
 type Builder struct {
@@ -135,10 +135,10 @@ func (b *Builder) KillProcess(cmd *exec.Cmd) error {
 	go func() {
 		done <- cmd.Wait()
 	}()
-	if err := terminateProcess(cmd, false); err != nil && !isProcessDone(err) {
+	if err := terminateProcess(cmd, processControl{}); err != nil && !isProcessDone(err) {
 		return err
 	}
-	return waitForExit(done, cmd, false)
+	return waitForExit(done, cmd, processControl{})
 }
 
 func (b *Builder) Close() error {
@@ -223,16 +223,27 @@ func (b *Builder) startLocked(output string) (*exec.Cmd, error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	processGroup := configureManagedProcess(cmd)
+	control, err := newProcessControl()
+	if err != nil {
+		return nil, fmt.Errorf("create process controller: %w", err)
+	}
+	prepareManagedProcess(cmd, control)
 	if err := cmd.Start(); err != nil {
+		_ = closeProcessControl(control)
 		return nil, err
+	}
+	if err := attachProcessControl(cmd, control); err != nil {
+		// Some Windows hosts disallow nested jobs. Keep the application usable
+		// with direct-process cleanup when job assignment is unavailable.
+		_ = closeProcessControl(control)
+		control = processControl{}
 	}
 
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
 	}()
-	running := &runningProcess{cmd: cmd, done: done, processGroup: processGroup}
+	running := &runningProcess{cmd: cmd, done: done, control: control}
 	b.running = running
 	b.process = cmd
 	return cmd, nil
@@ -244,6 +255,7 @@ func (b *Builder) refreshProcessLocked() {
 	}
 	select {
 	case <-b.running.done:
+		_ = closeProcessControl(b.running.control)
 		b.running = nil
 		b.process = nil
 	default:
@@ -254,13 +266,17 @@ func (b *Builder) stopRunningLocked(running *runningProcess) error {
 	if running == nil || running.cmd == nil || running.cmd.Process == nil {
 		return nil
 	}
-	if err := terminateProcess(running.cmd, running.processGroup); err != nil && !isProcessDone(err) {
+	if err := terminateProcess(running.cmd, running.control); err != nil && !isProcessDone(err) {
 		return err
 	}
-	return waitForExit(running.done, running.cmd, running.processGroup)
+	err := waitForExit(running.done, running.cmd, running.control)
+	if closeErr := closeProcessControl(running.control); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
-func waitForExit(done <-chan error, cmd *exec.Cmd, processGroup bool) error {
+func waitForExit(done <-chan error, cmd *exec.Cmd, control processControl) error {
 	timer := time.NewTimer(processStopTimeout)
 	defer timer.Stop()
 
@@ -268,7 +284,7 @@ func waitForExit(done <-chan error, cmd *exec.Cmd, processGroup bool) error {
 	case err := <-done:
 		return normalizeWaitError(err)
 	case <-timer.C:
-		if err := forceKillProcess(cmd, processGroup); err != nil && !isProcessDone(err) {
+		if err := forceKillProcess(cmd, control); err != nil && !isProcessDone(err) {
 			return err
 		}
 		select {
@@ -292,7 +308,7 @@ func normalizeWaitError(err error) error {
 }
 
 func isProcessDone(err error) bool {
-	return errors.Is(err, os.ErrProcessDone)
+	return errors.Is(err, os.ErrProcessDone) || processAlreadyGone(err)
 }
 
 func replaceBinary(stage, output string) error {
