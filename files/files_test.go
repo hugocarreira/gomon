@@ -19,12 +19,23 @@ func TestShouldIgnoreDir(t *testing.T) {
 }
 
 func TestShouldWatchFile(t *testing.T) {
-	if !ShouldWatchFile("main.go") {
-		t.Fatalf("expected .go files to be watched")
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "main.go", want: true},
+		{path: "nested/pkg/file.go", want: true},
+		{path: "go.mod", want: true},
+		{path: "go.sum", want: true},
+		{path: "go.work", want: true},
+		{path: "go.work.sum", want: true},
+		{path: "README.md", want: false},
+		{path: "main.go.txt", want: false},
 	}
-
-	if ShouldWatchFile("README.md") {
-		t.Fatalf("did not expect non-.go files to be watched")
+	for _, test := range tests {
+		if got := ShouldWatchFile(test.path); got != test.want {
+			t.Fatalf("ShouldWatchFile(%q) = %v, want %v", test.path, got, test.want)
+		}
 	}
 }
 
@@ -57,6 +68,14 @@ func TestVerifyProjectPath(t *testing.T) {
 	if err := VerifyProjectPath(filepath.Join(dir, "missing")); err == nil {
 		t.Fatalf("expected VerifyProjectPath to fail for missing path")
 	}
+
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := VerifyProjectPath(file); err == nil {
+		t.Fatal("expected VerifyProjectPath to reject a regular file")
+	}
 }
 
 func TestHandleFilesAddsDir(t *testing.T) {
@@ -75,5 +94,8 @@ func TestHandleFilesAddsDir(t *testing.T) {
 	f := NewFilesHandler(w)
 	if err := f.HandleFiles(dir); err != nil {
 		t.Fatalf("HandleFiles returned error: %v", err)
+	}
+	if !f.WasWatchedDir(dir) {
+		t.Fatalf("expected %s to be recorded as watched", dir)
 	}
 }
