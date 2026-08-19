@@ -1,2 +1,3 @@
-binary_path: "/tmp/main"
-debounce_time: 2000
+binary_path: ""
+debounce_time: 2s
+log_level: debug
