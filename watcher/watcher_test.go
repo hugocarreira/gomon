@@ -79,3 +79,9 @@ func TestWatcherStartStopsOnContextCancel(t *testing.T) {
 		t.Fatal("expected Stop to be called during cleanup")
 	}
 }
+
+func TestNewWatcherRejectsNilConfig(t *testing.T) {
+	if _, err := NewWatcher(t.TempDir(), nil, logger.NewLogger()); err == nil {
+		t.Fatal("expected nil config to return an error")
+	}
+}

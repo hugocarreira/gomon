@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
@@ -27,9 +28,11 @@ type Watcher struct {
 
 // NewWatcher creates a new Watcher instance.
 func NewWatcher(projectPath string, config *config.Config, log logger.ILogger) (*Watcher, error) {
+	if config == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal("Failed to create watcher", zap.Error(err))
 		return nil, err
 	}
 

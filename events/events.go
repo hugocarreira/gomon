@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -72,7 +73,8 @@ func (e *EventsHandler) HandleEvent(event fsnotify.Event) {
 	}
 
 	isDir, statErr := e.filesHandler.IsDir(event.Name)
-	if event.Op.Has(fsnotify.Create) && isDir {
+	ignoredDirectory := isDir && files.ShouldIgnoreDir(filepath.Base(event.Name))
+	if event.Op.Has(fsnotify.Create) && isDir && !ignoredDirectory {
 		if err := e.filesHandler.HandleFiles(event.Name); err != nil {
 			e.log.Error("Failed to add directory to watcher", zap.Error(err))
 		}
@@ -84,7 +86,7 @@ func (e *EventsHandler) HandleEvent(event fsnotify.Event) {
 	watchable := files.ShouldWatchFile(event.Name)
 	directoryChanged := e.filesHandler.WasWatchedDir(event.Name) && event.Op.Has(fsnotify.Remove|fsnotify.Rename)
 	inputChanged := watchable && event.Op.Has(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename)
-	newDirectory := isDir && event.Op.Has(fsnotify.Create)
+	newDirectory := isDir && event.Op.Has(fsnotify.Create) && !ignoredDirectory
 	if !inputChanged && !directoryChanged && !newDirectory {
 		return
 	}
