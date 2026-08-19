@@ -44,8 +44,9 @@ func TestDefineProjectPathWithFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "/tmp/foo" {
-		t.Fatalf("expected /tmp/foo, got %s", got)
+	want := filepath.Clean("/tmp/foo")
+	if got != want {
+		t.Fatalf("expected %s, got %s", want, got)
 	}
 }
 
@@ -54,8 +55,9 @@ func TestDefineProjectPathWithArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "/tmp/bar" {
-		t.Fatalf("expected /tmp/bar, got %s", got)
+	want := filepath.Clean("/tmp/bar")
+	if got != want {
+		t.Fatalf("expected %s, got %s", want, got)
 	}
 }
 
