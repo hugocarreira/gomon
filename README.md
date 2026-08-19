@@ -1,69 +1,87 @@
-# GoMon - Nodemon inspired for Golang
+# GoMon
 
-A practical development routine for Go projects.
+GoMon watches a Go project, rebuilds it after source changes, and restarts the
+application when the new build succeeds.
 
+## Requirements
 
-## Why this repo exists
-- A practical, self-contained dev workflow you can drop into any Go project.
-- A repeatable routine for building, watching, testing, linting, and shipping, with sensible defaults.
-- Clear guidance on how to extend and customize the workflow for your team.
+- Go 1.25.0 or newer
+- A Go project with a runnable package
 
 ## Installation
 
-```
+```bash
 go install github.com/hugocarreira/gomon@latest
 ```
 
-## Usage (bare minimum)
+## Usage
+
+```bash
+gomon [flags] [project_path]
 ```
-gomon ./path/to/your/go/project
+
+Examples:
+
+```bash
+gomon .
+gomon --path ./services/api --binary ./tmp/api
+gomon --config ./dev.gomon.yaml ./services/api
 ```
 
-This will start the watcher, rebuild on changes, and restart the binary as you edit code.
+Flags override configuration-file values:
 
-Notes:
-- Requires Go 1.25.0.
-- The dev routine assumes a conventional Go module layout and a main package in the target project.
+| Flag | Description |
+| --- | --- |
+| `--path` | Project directory; defaults to the current directory |
+| `--binary` | Output binary path; relative paths are resolved from the project |
+| `--config` | Explicit configuration file |
+| `--debounce` | Debounce delay in milliseconds |
+| `--log-level` | `debug`, `info`, `warn`, or `error` |
+| `--version` | Print version, commit, and build date |
+| `--help` | Print usage |
 
-## Development routine (your daily workflow)
-This section describes a repeatable, developer-friendly cycle that uses this lib as a core part of a daily workflow.
+When `--binary` is omitted, GoMon uses a unique temporary executable and
+removes it on shutdown. A failed build leaves the previous application running.
 
-- Start the watcher for a project you’re actively developing.
-- Edit code and rely on automatic rebuilds/tests when changes occur.
-- Run unit tests and lint locally to ensure quality before commits.
-- Iterate on bug fixes, new features, and improvements in a fast feedback loop.
-- Use the included commands to verify build, tests, and lint status before pushing.
+## Configuration
 
-Architecture overview:
-- watcher: watches filesystem changes and triggers rebuilds
-- builder: builds the Go project into a binary
-- runner: restarts the binary on successful builds
-- config: settings loaded via patterns (where applicable)
-- tests: unit tests for core components (where present)
+Create `.gomon.yaml` in the watched project:
 
-This layout keeps the runtime lean while providing a robust development loop.
+```yaml
+binary_path: ./tmp/api
+debounce_time: 2s
+log_level: info
+```
+
+The legacy `<project>/config/config.yaml` location is still accepted with a
+deprecation warning. If no configuration file exists, built-in defaults are
+used. `debounce_time` accepts Go duration strings such as `2s`; legacy numeric
+values are interpreted as milliseconds.
+
+By default GoMon rebuilds for changes to `.go`, `go.mod`, `go.sum`, `go.work`,
+and `go.work.sum`. Ignored directories include `.git`, `.svn`, `.hg`,
+`vendor`, `node_modules`, `.idea`, and `.vscode`. New directories are discovered
+without restarting GoMon.
 
 ## Development
 
-Prerequisites:
-- Go 1.25.0
-
-Install
-```
+```bash
 go mod download
 go build -o gomon .
-```
-
-Usage
-```
-./gomon /path/to/your/go/project
-```
-
-Configuration (where to customize)
-- If you need to customize paths or behavior, edit the relevant config in the project (see config/*) or pass flags as supported by the repo.
-
-Tests and linting
-```
 go test ./...
-golangci-lint run
+go test -race ./...
+go vet ./...
 ```
+
+The GitHub Actions workflow additionally checks formatting, module tidiness,
+linting, and Linux/macOS/Windows builds. Release artifacts are produced by
+GoReleaser for Linux, macOS, and Windows.
+
+## Architecture
+
+- `config`: project-aware configuration loading and validation
+- `files`: recursive directory registration and build-input filtering
+- `events`: filesystem event coalescing and rebuild scheduling
+- `builder`: staged builds and child-process lifecycle management
+- `watcher`: fsnotify loop and shutdown coordination
+- `logger`: structured, colorized terminal output

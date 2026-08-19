@@ -1,11 +1,17 @@
 package builder
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
+	"path/filepath"
+	"runtime"
+	"sync"
 	"time"
 )
+
+const processStopTimeout = 5 * time.Second
 
 type IBuilder interface {
 	BuildProject() error
@@ -14,10 +20,21 @@ type IBuilder interface {
 	KillProcess(cmd *exec.Cmd) error
 }
 
+type runningProcess struct {
+	cmd     *exec.Cmd
+	done    <-chan error
+	control processControl
+}
+
 type Builder struct {
 	projectDir string
 	binaryPath string
+	outputPath string
+	tempDir    string
 	process    *exec.Cmd
+	running    *runningProcess
+	closed     bool
+	mu         sync.Mutex
 }
 
 func NewBuilder(projectDir, binaryPath string) IBuilder {
@@ -27,69 +44,276 @@ func NewBuilder(projectDir, binaryPath string) IBuilder {
 	}
 }
 
+// BuildProject builds directly to the configured output path. Restarts use a
+// staging path so a failed build never interrupts the currently running app.
 func (b *Builder) BuildProject() error {
-	cmd := exec.Command("go", "build", "-C", b.projectDir, "-o", b.binaryPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return errors.New("builder is closed")
+	}
+
+	output, err := b.outputPathLocked()
+	if err != nil {
+		return err
+	}
+	return b.build(output)
 }
 
 func (b *Builder) RunBinary() (*exec.Cmd, error) {
-	cmd := exec.Command(b.binaryPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil, errors.New("builder is closed")
+	}
+	b.refreshProcessLocked()
+	if b.running != nil {
+		return nil, errors.New("binary is already running")
+	}
 
-	err := cmd.Start()
+	output, err := b.outputPathLocked()
 	if err != nil {
 		return nil, err
 	}
-
-	return cmd, nil
+	return b.startLocked(output)
 }
 
 func (b *Builder) RestartBinary() error {
-	err := b.BuildProject()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return errors.New("builder is closed")
+	}
+
+	output, err := b.outputPathLocked()
 	if err != nil {
 		return err
 	}
-
-	err = b.KillProcess(b.process)
+	stage, err := b.newStagePath(output)
 	if err != nil {
+		return fmt.Errorf("create build staging path: %w", err)
+	}
+	defer func() { _ = os.Remove(stage) }()
+
+	if err := b.build(stage); err != nil {
 		return err
 	}
 
-	b.process, err = b.RunBinary()
-	if err != nil {
-		return err
+	b.refreshProcessLocked()
+	if b.running != nil {
+		if err := b.stopRunningLocked(b.running); err != nil {
+			return fmt.Errorf("stop previous process: %w", err)
+		}
+		b.running = nil
+		b.process = nil
 	}
 
-	return nil
+	if err := replaceBinary(stage, output); err != nil {
+		return fmt.Errorf("promote built binary: %w", err)
+	}
+	_, err = b.startLocked(output)
+	return err
 }
 
 func (b *Builder) KillProcess(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	b.mu.Lock()
+	if b.running != nil && b.running.cmd == cmd {
+		err := b.stopRunningLocked(b.running)
+		if err == nil {
+			b.running = nil
+			b.process = nil
+		}
+		b.mu.Unlock()
+		return err
+	}
+	b.mu.Unlock()
 
-	// Try graceful kill first (SIGTERM)
-	err := cmd.Process.Signal(syscall.SIGTERM)
-	if err != nil {
-		// Process may have already exited
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	if err := terminateProcess(cmd, processControl{}); err != nil && !isProcessDone(err) {
+		return err
+	}
+	return waitForExit(done, cmd, processControl{})
+}
+
+func (b *Builder) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
 		return nil
 	}
+	if b.running != nil {
+		if err := b.stopRunningLocked(b.running); err != nil {
+			return err
+		}
+		b.running = nil
+		b.process = nil
+	}
+	if b.tempDir != "" {
+		if err := os.RemoveAll(b.tempDir); err != nil {
+			return err
+		}
+	}
+	b.closed = true
+	return nil
+}
 
-	// Wait for process to exit with a timeout
-	done := make(chan struct{})
+func (b *Builder) outputPathLocked() (string, error) {
+	if b.outputPath != "" {
+		return b.outputPath, nil
+	}
+
+	if b.binaryPath != "" {
+		if filepath.IsAbs(b.binaryPath) {
+			b.outputPath = filepath.Clean(b.binaryPath)
+		} else {
+			absolute, err := filepath.Abs(filepath.Join(b.projectDir, b.binaryPath))
+			if err != nil {
+				return "", fmt.Errorf("resolve binary path: %w", err)
+			}
+			b.outputPath = absolute
+		}
+		return b.outputPath, nil
+	}
+
+	tempDir, err := os.MkdirTemp("", "gomon-")
+	if err != nil {
+		return "", fmt.Errorf("create temporary binary directory: %w", err)
+	}
+	b.tempDir = tempDir
+	name := "app"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	b.outputPath = filepath.Join(tempDir, name)
+	return b.outputPath, nil
+}
+
+func (b *Builder) newStagePath(output string) (string, error) {
+	file, err := os.CreateTemp(filepath.Dir(output), "."+filepath.Base(output)+".gomon-*")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (b *Builder) build(output string) error {
+	cmd := exec.Command("go", "build", "-o", output, ".")
+	cmd.Dir = b.projectDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func (b *Builder) startLocked(output string) (*exec.Cmd, error) {
+	cmd := exec.Command(output)
+	cmd.Dir = b.projectDir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	control, err := newProcessControl()
+	if err != nil {
+		return nil, fmt.Errorf("create process controller: %w", err)
+	}
+	prepareManagedProcess(cmd, control)
+	if err := cmd.Start(); err != nil {
+		_ = closeProcessControl(control)
+		return nil, err
+	}
+	if err := attachProcessControl(cmd, control); err != nil {
+		// Some Windows hosts disallow nested jobs. Keep the application usable
+		// with direct-process cleanup when job assignment is unavailable.
+		_ = closeProcessControl(control)
+		control = processControl{}
+	}
+
+	done := make(chan error, 1)
 	go func() {
-		cmd.Wait()
-		close(done)
+		done <- cmd.Wait()
 	}()
+	running := &runningProcess{cmd: cmd, done: done, control: control}
+	b.running = running
+	b.process = cmd
+	return cmd, nil
+}
+
+func (b *Builder) refreshProcessLocked() {
+	if b.running == nil {
+		return
+	}
+	select {
+	case <-b.running.done:
+		_ = closeProcessControl(b.running.control)
+		b.running = nil
+		b.process = nil
+	default:
+	}
+}
+
+func (b *Builder) stopRunningLocked(running *runningProcess) error {
+	if running == nil || running.cmd == nil || running.cmd.Process == nil {
+		return nil
+	}
+	if err := terminateProcess(running.cmd, running.control); err != nil && !isProcessDone(err) {
+		return err
+	}
+	err := waitForExit(running.done, running.cmd, running.control)
+	if closeErr := closeProcessControl(running.control); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+func waitForExit(done <-chan error, cmd *exec.Cmd, control processControl) error {
+	timer := time.NewTimer(processStopTimeout)
+	defer timer.Stop()
 
 	select {
-	case <-done:
-		return nil
-	case <-time.After(5 * time.Second):
-		// Force kill if it doesn't exit gracefully
-		return cmd.Process.Kill()
+	case err := <-done:
+		return normalizeWaitError(err)
+	case <-timer.C:
+		if err := forceKillProcess(cmd, control); err != nil && !isProcessDone(err) {
+			return err
+		}
+		select {
+		case err := <-done:
+			return normalizeWaitError(err)
+		case <-time.After(time.Second):
+			return errors.New("process did not exit after force kill")
+		}
 	}
+}
+
+func normalizeWaitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return nil
+	}
+	return err
+}
+
+func isProcessDone(err error) bool {
+	return errors.Is(err, os.ErrProcessDone) || processAlreadyGone(err)
+}
+
+func replaceBinary(stage, output string) error {
+	if err := os.Remove(output); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Rename(stage, output)
 }

@@ -2,10 +2,13 @@ package watcher
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/hugocarreira/gomon/config"
 	"github.com/hugocarreira/gomon/files"
 	"github.com/hugocarreira/gomon/logger"
 )
@@ -48,7 +51,6 @@ func TestWatcherStartStopsOnContextCancel(t *testing.T) {
 	eventHandler := &stubEventsHandler{}
 	w := &Watcher{
 		projectPath:  dir,
-		binaryPath:   "binary",
 		log:          logger.NewLogger(),
 		watcher:      fsWatcher,
 		eventHandler: eventHandler,
@@ -77,5 +79,54 @@ func TestWatcherStartStopsOnContextCancel(t *testing.T) {
 	}
 	if !eventHandler.stopCalled {
 		t.Fatal("expected Stop to be called during cleanup")
+	}
+}
+
+func TestNewWatcherRejectsNilConfig(t *testing.T) {
+	if _, err := NewWatcher(t.TempDir(), nil, logger.NewLogger()); err == nil {
+		t.Fatal("expected nil config to return an error")
+	}
+}
+
+func TestNewWatcherCreatesOwnedResources(t *testing.T) {
+	w, err := NewWatcher(t.TempDir(), &config.Config{DebounceTime: time.Second}, logger.NewLogger())
+	if err != nil {
+		t.Fatalf("NewWatcher returned error: %v", err)
+	}
+	w.cleanup()
+	w.cleanup()
+}
+
+func TestWatcherStartForwardsFilesystemEvents(t *testing.T) {
+	dir := t.TempDir()
+	fsWatcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("failed to create fsnotify watcher: %v", err)
+	}
+	filesHandler := files.NewFilesHandler(fsWatcher)
+	eventHandler := &stubEventsHandler{}
+	w := &Watcher{
+		projectPath:  dir,
+		log:          logger.NewLogger(),
+		watcher:      fsWatcher,
+		eventHandler: eventHandler,
+		filesHandler: filesHandler,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Start(ctx) }()
+	time.Sleep(30 * time.Millisecond)
+	path := filepath.Join(dir, "changed.go")
+	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write event fixture: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("watcher.Start returned error: %v", err)
+	}
+	if len(eventHandler.handled) == 0 {
+		t.Fatal("expected watcher event to reach the event handler")
 	}
 }

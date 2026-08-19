@@ -2,6 +2,8 @@
 package logger
 
 import (
+	"strings"
+
 	"github.com/fatih/color"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -25,11 +27,28 @@ type Logger struct {
 	logger *zap.Logger
 }
 
-// NewLogger creates a new Logger instance with console output.
+// NewLogger creates a new debug-level Logger instance with console output.
 func NewLogger() ILogger {
+	return NewLoggerWithLevel("debug")
+}
+
+// NewLoggerWithLevel creates a Logger with the requested level. Invalid
+// values fall back to debug so configuration errors can still be reported.
+func NewLoggerWithLevel(level string) ILogger {
+	level = strings.ToLower(strings.TrimSpace(level))
+	logLevel := zap.DebugLevel
+	switch level {
+	case "error":
+		logLevel = zap.ErrorLevel
+	case "warn":
+		logLevel = zap.WarnLevel
+	case "info":
+		logLevel = zap.InfoLevel
+	}
+
 	logConfig := zap.Config{
 		Encoding:         "console",
-		Level:            zap.NewAtomicLevelAt(zap.DebugLevel),
+		Level:            zap.NewAtomicLevelAt(logLevel),
 		OutputPaths:      []string{"stdout"},
 		ErrorOutputPaths: []string{"stderr"},
 		EncoderConfig: zapcore.EncoderConfig{
