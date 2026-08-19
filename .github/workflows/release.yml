@@ -30,15 +30,6 @@ jobs:
         with:
           go-version: ${{ env.GOLANG_VERSION }}
 
-      - name: Set GOVERSION
-        run: echo "GOVERSION=$(go version | awk '{print $3}')" >> $GITHUB_ENV
-
-      - name: Set Gomon Version
-        run: echo "GOMON_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Show version
-        run: echo "GOVERSION=$GOVERSION GOMON_VERSION=$GOMON_VERSION"
-
       - name: Releaser
         uses: goreleaser/goreleaser-action@v2
         with:
@@ -47,5 +38,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOVERSION: ${{ env.GOVERSION }}
-          GOMON_VERSION: ${{ env.GOMON_VERSION }}
