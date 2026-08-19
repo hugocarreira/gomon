@@ -2,6 +2,8 @@ package events
 
 import (
 	"context"
+	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -27,82 +29,102 @@ type IEventsHandler interface {
 	Stop()
 }
 
-// EventsHandler processes file system events and triggers rebuilds.
+// EventsHandler processes file system events and triggers debounced rebuilds.
 type EventsHandler struct {
 	log           logger.ILogger
 	builder       builder.IBuilder
 	filesHandler  *files.Files
 	debounceTime  time.Duration
-	eventQueue    chan fsnotify.Event
+	rebuild       chan struct{}
 	lastEventTime map[string]time.Time
-	minInterval   time.Duration
 	initialRun    bool
-	mu            sync.RWMutex
+	started       bool
+	stopped       bool
+	mu            sync.Mutex
 	stopChan      chan struct{}
+	stopOnce      sync.Once
+	done          chan struct{}
 }
 
 // NewEventsHandler creates a new EventsHandler instance.
-func NewEventsHandler(log logger.ILogger, builder builder.IBuilder, filesHandler *files.Files, config *config.Config) *EventsHandler {
+func NewEventsHandler(log logger.ILogger, build builder.IBuilder, filesHandler *files.Files, cfg *config.Config) *EventsHandler {
+	debounceTime := config.DefaultDebounceTime
+	if cfg != nil && cfg.DebounceTime > 0 {
+		debounceTime = cfg.DebounceTime
+	}
 	return &EventsHandler{
 		log:           log,
-		builder:       builder,
+		builder:       build,
 		filesHandler:  filesHandler,
-		debounceTime:  config.DebounceTime,
-		eventQueue:    make(chan fsnotify.Event, 1),
+		debounceTime:  debounceTime,
+		rebuild:       make(chan struct{}, 1),
 		lastEventTime: make(map[string]time.Time),
-		minInterval:   100 * time.Millisecond,
-		initialRun:    false,
 		stopChan:      make(chan struct{}),
+		done:          make(chan struct{}),
 	}
 }
 
-// HandleEvent processes a file system event.
+// HandleEvent discovers new directories and schedules one trailing-edge
+// rebuild for relevant Go build input changes.
 func (e *EventsHandler) HandleEvent(event fsnotify.Event) {
-	if !files.ShouldWatchFile(event.Name) {
+	if e.isStopped() {
 		return
 	}
 
-	now := time.Now()
-
-	e.mu.RLock()
-	lastTime, exists := e.lastEventTime[event.Name]
-	e.mu.RUnlock()
-
-	if exists {
-		e.mu.RLock()
-		interval := now.Sub(lastTime)
-		e.mu.RUnlock()
-		if interval < e.minInterval {
-			return
+	isDir, statErr := e.filesHandler.IsDir(event.Name)
+	if event.Op.Has(fsnotify.Create) && isDir {
+		if err := e.filesHandler.HandleFiles(event.Name); err != nil {
+			e.log.Error("Failed to add directory to watcher", zap.Error(err))
 		}
+	}
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		e.log.Error("Failed to inspect filesystem event", zap.Error(statErr))
+	}
+
+	watchable := files.ShouldWatchFile(event.Name)
+	directoryChanged := e.filesHandler.WasWatchedDir(event.Name) && event.Op.Has(fsnotify.Remove|fsnotify.Rename)
+	inputChanged := watchable && event.Op.Has(fsnotify.Create|fsnotify.Write|fsnotify.Remove|fsnotify.Rename)
+	newDirectory := isDir && event.Op.Has(fsnotify.Create)
+	if !inputChanged && !directoryChanged && !newDirectory {
+		return
 	}
 
 	e.mu.Lock()
-	e.lastEventTime[event.Name] = now
+	e.lastEventTime[event.Name] = time.Now()
 	e.mu.Unlock()
-
 	e.log.Building("File changed, rebuilding...")
-
 	select {
-	case e.eventQueue <- event:
+	case e.rebuild <- struct{}{}:
 	default:
-		e.eventQueue <- event
 	}
 }
 
-// StartDebounce starts the debounce goroutine for processing events.
+// StartDebounce performs the initial build and starts a trailing-edge timer.
 func (e *EventsHandler) StartDebounce(ctx context.Context) {
+	e.mu.Lock()
+	if e.started || e.stopped {
+		e.mu.Unlock()
+		return
+	}
+	e.started = true
 	if !e.initialRun {
-		err := e.builder.RestartBinary()
-		if err != nil {
-			e.log.BuildError("Failed to start: " + err.Error())
-		} else {
-			e.log.Running("Application started")
-		}
 		e.initialRun = true
+		e.mu.Unlock()
+		e.restart()
+	} else {
+		e.mu.Unlock()
 	}
 
 	go func() {
+		defer close(e.done)
+		var timer *time.Timer
+		var timerC <-chan time.Time
+		defer func() {
+			if timer != nil {
+				timer.Stop()
+			}
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -111,96 +133,71 @@ func (e *EventsHandler) StartDebounce(ctx context.Context) {
 			case <-e.stopChan:
 				e.log.Info("Debounce goroutine stopped")
 				return
-			default:
-				time.Sleep(e.debounceTime * time.Millisecond)
-
-				select {
-				case event := <-e.eventQueue:
-					e.ProcessEvent(event)
-				default:
+			case <-e.rebuild:
+				if timer == nil {
+					timer = time.NewTimer(e.debounceTime)
+				} else {
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(e.debounceTime)
 				}
+				timerC = timer.C
+			case <-timerC:
+				timerC = nil
+				e.restart()
 			}
 		}
 	}()
 }
 
-// ProcessEvent dispatches the event to the appropriate handler.
+// ProcessEvent is retained as a direct-dispatch API for callers that already
+// have a fully formed event. The watcher itself uses HandleEvent so events are
+// coalesced before rebuilding.
 func (e *EventsHandler) ProcessEvent(event fsnotify.Event) {
-	switch event.Op {
-	case fsnotify.Create:
+	switch {
+	case event.Op.Has(fsnotify.Create):
 		e.OnCreate(event)
-	case fsnotify.Write:
+	case event.Op.Has(fsnotify.Write):
 		e.OnWrite(event)
-	case fsnotify.Remove:
+	case event.Op.Has(fsnotify.Remove):
 		e.OnRemove(event)
-	case fsnotify.Rename:
+	case event.Op.Has(fsnotify.Rename):
 		e.OnRename(event)
-	case fsnotify.Chmod:
+	case event.Op.Has(fsnotify.Chmod):
 		e.OnChmod(event)
 	}
 }
 
-// OnCreate handles file creation events.
+// OnCreate handles file or directory creation events.
 func (e *EventsHandler) OnCreate(event fsnotify.Event) {
 	e.log.Info("File or directory created", zap.String("file", event.Name))
-
-	err := e.filesHandler.HandleFiles(event.Name)
-	if err != nil {
-		e.log.Error("Failed to add directory to watcher", zap.Error(err))
-	}
-
-	e.log.Building("Rebuilding...")
-	err = e.builder.RestartBinary()
-	if err != nil {
-		e.log.BuildError("Failed to restart: " + err.Error())
-	} else {
-		e.log.BuildSuccess("Build successful")
-	}
+	e.addDirectory(event.Name)
+	e.restart()
 }
 
 // OnWrite handles file modification events.
 func (e *EventsHandler) OnWrite(event fsnotify.Event) {
 	e.log.Info("File or directory modified", zap.String("file", event.Name))
-
-	err := e.filesHandler.HandleFiles(event.Name)
-	if err != nil {
-		e.log.Error("Failed to add directory to watcher", zap.Error(err))
-	}
-
-	e.log.Building("Rebuilding...")
-	err = e.builder.RestartBinary()
-	if err != nil {
-		e.log.BuildError("Failed to restart: " + err.Error())
-	} else {
-		e.log.BuildSuccess("Build successful")
-	}
+	e.addDirectory(event.Name)
+	e.restart()
 }
 
 // OnRemove handles file removal events.
 func (e *EventsHandler) OnRemove(event fsnotify.Event) {
 	e.log.Info("File or directory removed", zap.String("file", event.Name))
-
-	err := e.filesHandler.HandleFiles(event.Name)
-	if err != nil {
-		e.log.Error("Failed to handle removed file", zap.Error(err))
-	}
-
-	e.log.Building("Rebuilding...")
-	err = e.builder.RestartBinary()
-	if err != nil {
-		e.log.BuildError("Failed to restart: " + err.Error())
-	} else {
-		e.log.BuildSuccess("Build successful")
-	}
+	e.addDirectory(event.Name)
+	e.restart()
 }
 
 // OnRename handles file rename events.
 func (e *EventsHandler) OnRename(event fsnotify.Event) {
 	e.log.Info("File renamed", zap.String("file", event.Name))
-	err := e.filesHandler.HandleFiles(event.Name)
-	if err != nil {
-		e.log.Error("Failed to handle renamed file", zap.Error(err))
-	}
+	e.addDirectory(event.Name)
+	e.restart()
 }
 
 // OnChmod handles file permission change events.
@@ -210,10 +207,41 @@ func (e *EventsHandler) OnChmod(event fsnotify.Event) {
 
 // OnError handles watcher errors.
 func (e *EventsHandler) OnError(err error) {
-	e.log.Error("Watcher error", zap.Error(err))
+	if err != nil {
+		e.log.Error("Watcher error", zap.Error(err))
+	}
 }
 
-// Stop stops the event handler goroutine.
+// Stop stops the event handler goroutine. It is safe to call repeatedly.
 func (e *EventsHandler) Stop() {
-	close(e.stopChan)
+	e.stopOnce.Do(func() { close(e.stopChan) })
+	e.mu.Lock()
+	started := e.started
+	e.stopped = true
+	e.mu.Unlock()
+	if started {
+		<-e.done
+	}
+}
+
+func (e *EventsHandler) addDirectory(path string) {
+	if err := e.filesHandler.HandleFiles(path); err != nil {
+		e.log.Error("Failed to add directory to watcher", zap.Error(err))
+	}
+}
+
+func (e *EventsHandler) restart() {
+	e.log.Building("Rebuilding...")
+	if err := e.builder.RestartBinary(); err != nil {
+		e.log.BuildError("Failed to restart: " + err.Error())
+		return
+	}
+	e.log.BuildSuccess("Build successful")
+}
+
+func (e *EventsHandler) isStopped() bool {
+	e.mu.Lock()
+	stopped := e.stopped
+	e.mu.Unlock()
+	return stopped
 }

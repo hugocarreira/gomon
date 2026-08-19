@@ -21,6 +21,7 @@ func (f *fakeBuilder) BuildProject() error             { return nil }
 func (f *fakeBuilder) RunBinary() (*exec.Cmd, error)   { return nil, nil }
 func (f *fakeBuilder) RestartBinary() error            { f.restartCalls++; return nil }
 func (f *fakeBuilder) KillProcess(cmd *exec.Cmd) error { return nil }
+func (f *fakeBuilder) Close() error                    { return nil }
 
 type fakeLogger struct {
 	infos        []string
