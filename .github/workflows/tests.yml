@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -25,22 +26,40 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Check formatting
-        shell: bash
-        run: test -z "$(gofmt -l .)"
-
-      - name: Check module files
-        run: go mod tidy -diff
-
-      - name: Run vet
-        run: go vet ./...
-
       - name: Run tests
         run: go test ./...
 
       - name: Run race detector
         if: matrix.os == 'ubuntu-latest'
         run: go test -race ./...
+
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go 1.25
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          files="$(gofmt -l .)"
+          if [[ -n "$files" ]]; then
+            echo "The following Go files are not formatted:"
+            printf '%s\n' "$files"
+            exit 1
+          fi
+
+      - name: Check module files
+        run: go mod tidy -diff
+
+      - name: Run vet
+        run: go vet ./...
 
   lint:
     name: Lint
@@ -59,3 +78,20 @@ jobs:
         with:
           version: v2.12.2
           args: --timeout=5m
+
+  required:
+    name: Required checks
+    if: ${{ always() }}
+    needs: [test, quality, lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+        run: |
+          if [[ "$TEST_RESULT" != "success" || "$QUALITY_RESULT" != "success" || "$LINT_RESULT" != "success" ]]; then
+            echo "test=$TEST_RESULT quality=$QUALITY_RESULT lint=$LINT_RESULT"
+            exit 1
+          fi
