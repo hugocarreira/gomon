@@ -4,16 +4,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/hugocarreira/gomon/config"
 	"github.com/hugocarreira/gomon/files"
 	"github.com/hugocarreira/gomon/logger"
 	"github.com/hugocarreira/gomon/watcher"
-
 	"go.uber.org/zap"
 )
 
@@ -23,58 +23,100 @@ var (
 	date    = "unknown"
 )
 
-func main() {
+// run executes the CLI and returns a process exit code. Keeping this separate
+// from main makes argument handling and startup failures testable.
+func run(args []string, stdout, stderr io.Writer) int {
+	flagSet := flag.NewFlagSet("gomon", flag.ContinueOnError)
+	flagSet.SetOutput(stderr)
 
-	helpFlag := flag.Bool("help", false, "Show usage information")
-	projectPath := flag.String("path", "", "Path to the Go project to watch (default: current directory)")
-	binaryPath := flag.String("binary", "", "Path to the output binary")
-	debounce := flag.Int("debounce", 0, "Debounce time in milliseconds")
-	showVersion := flag.Bool("version", false, "Show version information")
-	flag.Parse()
+	var projectPath string
+	var binaryPath string
+	var configPath string
+	var debounce int
+	var logLevel string
+	var help bool
+	var showVersion bool
 
-	if *showVersion {
-		fmt.Printf("gomon version %s (commit: %s, date: %s)\n", version, commit, date)
-		os.Exit(0)
+	flagSet.StringVar(&projectPath, "path", "", "Path to the Go project to watch (default: current directory)")
+	flagSet.StringVar(&binaryPath, "binary", "", "Path to the output binary")
+	flagSet.StringVar(&configPath, "config", "", "Path to a configuration file")
+	flagSet.IntVar(&debounce, "debounce", 0, "Debounce time in milliseconds (default: 2000)")
+	flagSet.StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, or error")
+	flagSet.BoolVar(&showVersion, "version", false, "Show version information")
+	flagSet.BoolVar(&help, "help", false, "Show usage information")
+	flagSet.Usage = func() {
+		printUsage(stdout)
 	}
 
-	if *helpFlag {
-		fmt.Println("GoMon usage:")
-		fmt.Println("  -path string    Path to the Go project to watch (default: current directory)")
-		fmt.Println("  -binary string  Path to the output binary")
-		fmt.Println("  -debounce int   Debounce time in milliseconds (default: 2000)")
-		fmt.Println("  -version        Show version information")
-		fmt.Println("  -help           Show this help message")
-		os.Exit(0)
+	if err := flagSet.Parse(args); err != nil {
+		return 2
+	}
+	if showVersion {
+		fmt.Fprintf(stdout, "gomon version %s (commit: %s, date: %s)\n", version, commit, date)
+		return 0
+	}
+	if help {
+		printUsage(stdout)
+		return 0
 	}
 
-	log := logger.NewLogger()
+	positional := flagSet.Args()
+	if len(positional) > 1 {
+		fmt.Fprintln(stderr, "only one positional project path is allowed")
+		return 2
+	}
+	if projectPath != "" && len(positional) == 1 {
+		fmt.Fprintln(stderr, "use either --path or a positional project path, not both")
+		return 2
+	}
+	if debounce < 0 {
+		fmt.Fprintln(stderr, "debounce must not be negative")
+		return 2
+	}
+	if logLevel != "" && !config.ValidLogLevel(logLevel) {
+		fmt.Fprintf(stderr, "unsupported log level %q\n", logLevel)
+		return 2
+	}
 
-	err := config.LoadConfig()
+	pathArgs := []string{"gomon"}
+	pathArgs = append(pathArgs, positional...)
+	actualPath, err := files.DefineProjectPathWithFlag(projectPath, pathArgs)
 	if err != nil {
-		log.Fatal("Failed to load configuration", zap.Error(err))
+		fmt.Fprintf(stderr, "failed to determine project path: %v\n", err)
+		return 1
 	}
-
-	if *projectPath != "" {
-		config.Global.BinaryPath = *binaryPath
-	}
-	if *debounce > 0 {
-		config.Global.DebounceTime = time.Duration(*debounce) * time.Millisecond
-	}
-
-	actualPath, err := files.DefineProjectPathWithFlag(*projectPath, os.Args)
+	actualPath, err = filepath.Abs(actualPath)
 	if err != nil {
-		log.Fatal("Failed to determine project path", zap.Error(err))
+		fmt.Fprintf(stderr, "failed to resolve project path: %v\n", err)
+		return 1
 	}
-	log.Debug("Project path set", zap.String("path", actualPath))
-
-	err = files.VerifyProjectPath(actualPath)
-	if err != nil {
-		log.Fatal("Project directory not found", zap.String("projectPath", actualPath))
+	if err := files.VerifyProjectPath(actualPath); err != nil {
+		fmt.Fprintf(stderr, "project directory not found: %v\n", err)
+		return 1
 	}
 
-	w, err := watcher.NewWatcher(actualPath, config.Global, log)
+	baseLog := logger.NewLogger()
+	config.AppLogger = baseLog
+	cfg, err := config.LoadConfigForProject(actualPath, configPath)
 	if err != nil {
-		log.Fatal("Failed to create watcher", zap.Error(err))
+		baseLog.Error("Failed to load configuration", zap.Error(err))
+		return 1
+	}
+	if binaryPath != "" {
+		cfg.BinaryPath = binaryPath
+	}
+	if debounce > 0 {
+		cfg.DebounceTime = config.DurationFromMilliseconds(debounce)
+	}
+	if logLevel != "" {
+		cfg.LogLevel = logLevel
+	}
+	log := logger.NewLoggerWithLevel(cfg.LogLevel)
+
+	w, err := watcher.NewWatcher(actualPath, cfg, log)
+	if err != nil {
+		log.Error("Failed to create watcher", zap.Error(err))
+		return 1
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,15 +124,37 @@ func main() {
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
+	defer signal.Stop(sigChan)
 	go func() {
-		sig := <-sigChan
-		log.Info("Received shutdown signal", zap.String("signal", sig.String()))
-		cancel()
+		select {
+		case sig := <-sigChan:
+			log.Info("Received shutdown signal", zap.String("signal", sig.String()))
+			cancel()
+		case <-ctx.Done():
+		}
 	}()
 
-	err = w.Start(ctx)
-	if err != nil {
-		log.Fatal("Failed to start watcher", zap.Error(err))
+	if err := w.Start(ctx); err != nil {
+		log.Error("Failed to start watcher", zap.Error(err))
+		return 1
 	}
+	return 0
+}
+
+func printUsage(out io.Writer) {
+	fmt.Fprintln(out, "GoMon usage:")
+	fmt.Fprintln(out, "  gomon [flags] [project_path]")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Flags:")
+	fmt.Fprintln(out, "  -path string       Path to the Go project to watch (default: current directory)")
+	fmt.Fprintln(out, "  -binary string     Path to the output binary")
+	fmt.Fprintln(out, "  -config string     Path to a configuration file")
+	fmt.Fprintln(out, "  -debounce int      Debounce time in milliseconds (default: 2000)")
+	fmt.Fprintln(out, "  -log-level string  Log level: debug, info, warn, or error")
+	fmt.Fprintln(out, "  -version           Show version information")
+	fmt.Fprintln(out, "  -help              Show this help message")
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
