@@ -32,19 +32,19 @@ type IEventsHandler interface {
 
 // EventsHandler processes file system events and triggers debounced rebuilds.
 type EventsHandler struct {
-	log           logger.ILogger
-	builder       builder.IBuilder
-	filesHandler  *files.Files
-	debounceTime  time.Duration
-	rebuild       chan struct{}
-	lastEventTime map[string]time.Time
-	initialRun    bool
-	started       bool
-	stopped       bool
-	mu            sync.Mutex
-	stopChan      chan struct{}
-	stopOnce      sync.Once
-	done          chan struct{}
+	log          logger.ILogger
+	builder      builder.IBuilder
+	filesHandler *files.Files
+	debounceTime time.Duration
+	rebuild      chan struct{}
+	lastEventAt  time.Time
+	initialRun   bool
+	started      bool
+	stopped      bool
+	mu           sync.Mutex
+	stopChan     chan struct{}
+	stopOnce     sync.Once
+	done         chan struct{}
 }
 
 // NewEventsHandler creates a new EventsHandler instance.
@@ -54,14 +54,13 @@ func NewEventsHandler(log logger.ILogger, build builder.IBuilder, filesHandler *
 		debounceTime = cfg.DebounceTime
 	}
 	return &EventsHandler{
-		log:           log,
-		builder:       build,
-		filesHandler:  filesHandler,
-		debounceTime:  debounceTime,
-		rebuild:       make(chan struct{}, 1),
-		lastEventTime: make(map[string]time.Time),
-		stopChan:      make(chan struct{}),
-		done:          make(chan struct{}),
+		log:          log,
+		builder:      build,
+		filesHandler: filesHandler,
+		debounceTime: debounceTime,
+		rebuild:      make(chan struct{}, 1),
+		stopChan:     make(chan struct{}),
+		done:         make(chan struct{}),
 	}
 }
 
@@ -92,7 +91,7 @@ func (e *EventsHandler) HandleEvent(event fsnotify.Event) {
 	}
 
 	e.mu.Lock()
-	e.lastEventTime[event.Name] = time.Now()
+	e.lastEventAt = time.Now()
 	e.mu.Unlock()
 	e.log.Building("File changed, rebuilding...")
 	select {
@@ -136,24 +135,35 @@ func (e *EventsHandler) StartDebounce(ctx context.Context) {
 				e.log.Info("Debounce goroutine stopped")
 				return
 			case <-e.rebuild:
-				if timer == nil {
-					timer = time.NewTimer(e.debounceTime)
-				} else {
-					if !timer.Stop() {
-						select {
-						case <-timer.C:
-						default:
-						}
-					}
-					timer.Reset(e.debounceTime)
-				}
-				timerC = timer.C
+				timerC = resetDebounceTimer(&timer, e.debounceTime)
 			case <-timerC:
+				e.mu.Lock()
+				remaining := e.debounceTime - time.Since(e.lastEventAt)
+				e.mu.Unlock()
+				if remaining > 0 {
+					timerC = resetDebounceTimer(&timer, remaining)
+					continue
+				}
 				timerC = nil
 				e.restart()
 			}
 		}
 	}()
+}
+
+func resetDebounceTimer(timer **time.Timer, duration time.Duration) <-chan time.Time {
+	if *timer == nil {
+		*timer = time.NewTimer(duration)
+	} else {
+		if !(*timer).Stop() {
+			select {
+			case <-(*timer).C:
+			default:
+			}
+		}
+		(*timer).Reset(duration)
+	}
+	return (*timer).C
 }
 
 // ProcessEvent is retained as a direct-dispatch API for callers that already

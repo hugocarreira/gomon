@@ -51,7 +51,6 @@ func TestWatcherStartStopsOnContextCancel(t *testing.T) {
 	eventHandler := &stubEventsHandler{}
 	w := &Watcher{
 		projectPath:  dir,
-		binaryPath:   "binary",
 		log:          logger.NewLogger(),
 		watcher:      fsWatcher,
 		eventHandler: eventHandler,

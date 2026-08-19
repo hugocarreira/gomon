@@ -42,7 +42,7 @@ func main() { for { time.Sleep(time.Second) } }
 
 	instance := NewBuilder(project, "")
 	b := instance.(*Builder)
-	t.Cleanup(func() { _ = instance.Close() })
+	t.Cleanup(func() { _ = b.Close() })
 
 	if err := instance.RestartBinary(); err != nil {
 		t.Fatalf("initial restart failed: %v", err)
@@ -79,7 +79,8 @@ func main() {
 `)
 
 	instance := NewBuilder(project, "")
-	t.Cleanup(func() { _ = instance.Close() })
+	b := instance.(*Builder)
+	t.Cleanup(func() { _ = b.Close() })
 	if err := instance.RestartBinary(); err != nil {
 		t.Fatalf("restart failed: %v", err)
 	}
@@ -108,7 +109,7 @@ func main() { time.Sleep(30 * time.Second) }
 
 	instance := NewBuilder(project, "")
 	b := instance.(*Builder)
-	t.Cleanup(func() { _ = instance.Close() })
+	t.Cleanup(func() { _ = b.Close() })
 	if err := instance.BuildProject(); err != nil {
 		t.Fatalf("build failed: %v", err)
 	}
@@ -122,10 +123,10 @@ func main() { time.Sleep(30 * time.Second) }
 	if err := instance.KillProcess(cmd); err != nil {
 		t.Fatalf("kill failed: %v", err)
 	}
-	if err := instance.Close(); err != nil {
+	if err := b.Close(); err != nil {
 		t.Fatalf("close failed: %v", err)
 	}
-	if err := instance.Close(); err != nil {
+	if err := b.Close(); err != nil {
 		t.Fatalf("second close failed: %v", err)
 	}
 }
@@ -141,10 +142,11 @@ func TestBuilderRejectsMissingOutputDirectory(t *testing.T) {
 func TestBuilderRunWithoutBuiltBinaryFails(t *testing.T) {
 	project := writeBuilderProject(t, "package main\nfunc main() {}\n")
 	instance := NewBuilder(project, "missing-app")
+	b := instance.(*Builder)
 	if _, err := instance.RunBinary(); err == nil {
 		t.Fatal("expected running a missing binary to fail")
 	}
-	if err := instance.Close(); err != nil {
+	if err := b.Close(); err != nil {
 		t.Fatalf("close failed: %v", err)
 	}
 }

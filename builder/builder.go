@@ -18,7 +18,6 @@ type IBuilder interface {
 	RunBinary() (*exec.Cmd, error)
 	RestartBinary() error
 	KillProcess(cmd *exec.Cmd) error
-	Close() error
 }
 
 type runningProcess struct {
@@ -120,12 +119,13 @@ func (b *Builder) KillProcess(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-
 	b.mu.Lock()
 	if b.running != nil && b.running.cmd == cmd {
 		err := b.stopRunningLocked(b.running)
-		b.running = nil
-		b.process = nil
+		if err == nil {
+			b.running = nil
+			b.process = nil
+		}
 		b.mu.Unlock()
 		return err
 	}
@@ -147,20 +147,20 @@ func (b *Builder) Close() error {
 	if b.closed {
 		return nil
 	}
-	b.closed = true
-
-	var stopErr error
 	if b.running != nil {
-		stopErr = b.stopRunningLocked(b.running)
+		if err := b.stopRunningLocked(b.running); err != nil {
+			return err
+		}
 		b.running = nil
 		b.process = nil
 	}
 	if b.tempDir != "" {
-		if err := os.RemoveAll(b.tempDir); err != nil && stopErr == nil {
-			stopErr = err
+		if err := os.RemoveAll(b.tempDir); err != nil {
+			return err
 		}
 	}
-	return stopErr
+	b.closed = true
+	return nil
 }
 
 func (b *Builder) outputPathLocked() (string, error) {

@@ -30,7 +30,6 @@ func (f *fakeBuilder) RestartBinary() error {
 	return nil
 }
 func (f *fakeBuilder) KillProcess(cmd *exec.Cmd) error { return nil }
-func (f *fakeBuilder) Close() error                    { return nil }
 func (f *fakeBuilder) restarts() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -158,8 +157,8 @@ func TestEventsHandlerHandleEventIgnoresNonGo(t *testing.T) {
 
 	handler.HandleEvent(fsnotify.Event{Name: "README.md", Op: fsnotify.Write})
 
-	if _, exists := handler.lastEventTime["README.md"]; exists {
-		t.Fatalf("did not expect non-Go file to update lastEventTime")
+	if !handler.lastEventAt.IsZero() {
+		t.Fatalf("did not expect non-Go file to update debounce state")
 	}
 }
 
@@ -172,7 +171,7 @@ func TestEventsHandlerHandleEventWatchesGoBuildMetadata(t *testing.T) {
 	}
 
 	handler.HandleEvent(fsnotify.Event{Name: path, Op: fsnotify.Write})
-	if _, exists := handler.lastEventTime[path]; !exists {
+	if handler.lastEventAt.IsZero() {
 		t.Fatal("expected go.mod to schedule a rebuild")
 	}
 }

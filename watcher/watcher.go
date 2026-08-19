@@ -17,7 +17,6 @@ import (
 // Watcher monitors file changes in the project path and triggers rebuilds.
 type Watcher struct {
 	projectPath  string
-	binaryPath   string
 	builder      builder.IBuilder
 	log          logger.ILogger
 	watcher      *fsnotify.Watcher
@@ -42,7 +41,6 @@ func NewWatcher(projectPath string, config *config.Config, log logger.ILogger) (
 
 	return &Watcher{
 		projectPath:  projectPath,
-		binaryPath:   config.BinaryPath,
 		builder:      b,
 		log:          log,
 		watcher:      w,
@@ -96,8 +94,8 @@ func (w *Watcher) cleanup() {
 		w.log.Info("Cleaning up resources...")
 
 		w.eventHandler.Stop()
-		if w.builder != nil {
-			if err := w.builder.Close(); err != nil {
+		if closer, ok := w.builder.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
 				w.log.Error("Failed to stop application", zap.Error(err))
 			}
 		}
