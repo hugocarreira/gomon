@@ -56,6 +56,19 @@ func TestRunStartsAndStopsProjectFromAnyWorkingDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("signal-driven integration test uses Unix process signals")
 	}
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.Chdir(outside); err != nil {
+		t.Fatalf("change to unrelated working directory: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
 	project := t.TempDir()
 	if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte("module example.com/run-fixture\n\ngo 1.25\n"), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
